@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Remote Control</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { background:#0d0d14; color:#e0e0e0; font-family:'Segoe UI',Arial,sans-serif; height:100vh; overflow:hidden; }
+
+  /* ── 기기 목록 ── */
+  #list-page {
+    height:100vh; overflow-y:auto; padding:24px 20px;
+  }
+  .page-title {
+    font-size:22px; font-weight:700; color:#fff; margin-bottom:4px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .page-title span { font-size:26px; }
+  .page-sub { color:#555; font-size:13px; margin-bottom:24px; }
+
+  .device-card {
+    background:#141420; border:1px solid #1e1e30;
+    border-radius:12px; padding:16px 18px; margin-bottom:12px;
+    cursor:pointer; display:flex; align-items:center; gap:14px;
+    transition:all 0.15s;
+  }
+  .device-card:hover { border-color:#4f46e5; background:#161624; }
+  .device-icon {
+    width:42px; height:42px; border-radius:10px;
+    background:#1e1e35; display:flex; align-items:center;
+    justify-content:center; font-size:20px; flex-shrink:0;
+  }
+  .device-name { font-size:16px; font-weight:600; color:#fff; }
+  .device-meta { font-size:12px; color:#555; margin-top:3px; }
+  .status-badge {
+    margin-left:auto; width:8px; height:8px;
+    border-radius:50%; background:#22c55e; flex-shrink:0;
+    box-shadow: 0 0 6px #22c55e80;
+  }
+  .empty { color:#444; font-size:14px; padding:20px 0; }
+
+  /* ── 뷰어 ── */
+  #viewer-page {
+    display:none; flex-direction:column; height:100vh;
+  }
+  #toolbar {
+    background:#0a0a10; border-bottom:1px solid #1a1a28;
+    padding:10px 14px; display:flex; align-items:center; gap:10px;
+    flex-shrink:0; min-height:52px;
+  }
+  #back-btn {
+    background:none; border:1px solid #2a2a40; color:#aaa;
+    padding:5px 12px; border-radius:7px; cursor:pointer; font-size:13px;
+  }
+  #back-btn:hover { border-color:#4f46e5; color:#fff; }
+  #dev-name { font-weight:700; font-size:15px; color:#fff; }
+  #toggle-btn {
+    padding:6px 16px; border:none; border-radius:20px;
+    cursor:pointer; font-weight:700; font-size:13px;
+    background:#1e1e30; color:#666; transition:all 0.2s;
+  }
+  #toggle-btn.on { background:#4f46e5; color:#fff; box-shadow:0 0 12px #4f46e540; }
+  #conn-status { font-size:12px; color:#555; }
+  #fps-display { font-size:11px; color:#333; margin-left:auto; }
+
+  #canvas-wrap {
+    flex:1; overflow:hidden; background:#000;
+    display:flex; align-items:center; justify-content:center; position:relative;
+  }
+  #screen {
+    max-width:100%; max-height:100%; display:block;
+    image-rendering:auto;
+  }
+  #canvas-hint {
+    position:absolute; color:#333; font-size:15px; pointer-events:none;
+    text-align:center; line-height:2;
+  }
+</style>
+</head>
+<body>
+
+<!-- 기기 목록 -->
+<div id="list-page">
+  <div class="page-title"><span>🖥️</span> Remote Control</div>
+  <div class="page-sub">접속할 기기를 선택하세요</div>
+  <div id="devices-wrap"><div class="empty">기기 검색 중...</div></div>
+</div>
+
+<!-- 뷰어 -->
+<div id="viewer-page">
+  <div id="toolbar">
+    <button id="back-btn" onclick="disconnect()">← 뒤로</button>
+    <span id="dev-name"></span>
+    <button id="toggle-btn" onclick="toggleControl()">제어 OFF</button>
+    <span id="conn-status">연결 중...</span>
+    <span id="fps-display"></span>
+  </div>
+  <div id="canvas-wrap">
+    <canvas id="screen"></canvas>
+    <div id="canvas-hint">화면 불러오는 중...</div>
+  </div>
+</div>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+// ── Firebase 초기화 ──────────────────────
+firebase.initializeApp({
+  apiKey: "AIzaSyDr0Pw6UZVLJiZbqnChHr4MlzwWejYArFc",
+  authDomain: "remote-ctrl-c3035.firebaseapp.com",
+  databaseURL: "https://remote-ctrl-c3035-default-rtdb.firebaseio.com",
+  projectId: "remote-ctrl-c3035",
+  storageBucket: "remote-ctrl-c3035.firebasestorage.app",
+  messagingSenderId: "309669054570",
+  appId: "1:309669054570:web:a8ae7c0b61b02ebc3fa213"
+});
+const db = firebase.database();
+
+// ── 상태 ────────────────────────────────
+let ws = null;
+let ctrlOn = false;
+let sw = 1920, sh = 1080;
+let fCount = 0, fTime = Date.now();
+
+// ── 기기 목록 구독 ───────────────────────
+db.ref("devices").on("value", snap => {
+  const wrap = document.getElementById("devices-wrap");
+  const data = snap.val();
+  if (!data || !Object.keys(data).length) {
+    wrap.innerHTML = '<div class="empty">온라인 기기 없음<br>agent.py가 실행 중인지 확인하세요</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  Object.entries(data).forEach(([name, info]) => {
+    const card = document.createElement("div");
+    card.className = "device-card";
+    card.innerHTML = `
+      <div class="device-icon">🖥️</div>
+      <div>
+        <div class="device-name">${name}</div>
+        <div class="device-meta">${info.ip || '?'}:${info.port || 8889}
+          · viewer ${info.viewers || 0}명
+        </div>
+      </div>
+      <div class="status-badge"></div>
+    `;
+    card.onclick = () => connect(name, info);
+    wrap.appendChild(card);
+  });
+});
+
+// ── 연결 ────────────────────────────────
+function connect(name, info) {
+  document.getElementById("list-page").style.display = "none";
+  document.getElementById("viewer-page").style.display = "flex";
+  document.getElementById("dev-name").textContent = name;
+  document.getElementById("conn-status").textContent = "연결 중...";
+  document.getElementById("canvas-hint").style.display = "flex";
+
+  const url = `ws://${info.ip}:${info.port}`;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    document.getElementById("conn-status").textContent = "연결됨";
+  };
+
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.t === "frame") renderFrame(msg.d);
+    } catch {}
+  };
+
+  ws.onclose = () => {
+    document.getElementById("conn-status").textContent = "끊김";
+    if (ctrlOn) toggleControl();
+  };
+
+  ws.onerror = () => {
+    document.getElementById("conn-status").textContent =
+      "연결 실패 — 같은 네트워크인지 확인";
+  };
+}
+
+function disconnect() {
+  if (ctrlOn) toggleControl();
+  if (ws) { ws.close(); ws = null; }
+  document.getElementById("list-page").style.display = "block";
+  document.getElementById("viewer-page").style.display = "none";
+}
+
+// ── 화면 렌더링 ─────────────────────────
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+
+function renderFrame(b64) {
+  const img = new Image();
+  img.onload = () => {
+    if (canvas.width !== img.width) canvas.width = img.width;
+    if (canvas.height !== img.height) canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    document.getElementById("canvas-hint").style.display = "none";
+
+    fCount++;
+    const now = Date.now();
+    if (now - fTime >= 1000) {
+      document.getElementById("fps-display").textContent = `${fCount} fps`;
+      fCount = 0; fTime = now;
+    }
+  };
+  img.src = "data:image/jpeg;base64," + b64;
+}
+
+// ── 원격제어 토글 ───────────────────────
+function toggleControl() {
+  ctrlOn = !ctrlOn;
+  const btn = document.getElementById("toggle-btn");
+  btn.textContent = ctrlOn ? "제어 ON" : "제어 OFF";
+  btn.className = ctrlOn ? "on" : "";
+  send({ t: "toggle", active: ctrlOn });
+  if (ctrlOn) canvas.focus();
+}
+
+// ── 메시지 전송 ─────────────────────────
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify(obj));
+}
+
+// ── 마우스 입력 ─────────────────────────
+canvas.setAttribute("tabindex", "0");
+
+canvas.addEventListener("mousemove", e => {
+  if (!ctrlOn) return;
+  const r = canvas.getBoundingClientRect();
+  send({ t:"move", x:(e.clientX-r.left)/r.width, y:(e.clientY-r.top)/r.height });
+});
+
+canvas.addEventListener("mousedown", e => {
+  if (!ctrlOn) return;
+  canvas.focus();
+  const r = canvas.getBoundingClientRect();
+  send({ t:"click", x:(e.clientX-r.left)/r.width, y:(e.clientY-r.top)/r.height,
+         btn: e.button===0?"l":"r", down:true });
+  e.preventDefault();
+});
+
+canvas.addEventListener("mouseup", e => {
+  if (!ctrlOn) return;
+  const r = canvas.getBoundingClientRect();
+  send({ t:"click", x:(e.clientX-r.left)/r.width, y:(e.clientY-r.top)/r.height,
+         btn: e.button===0?"l":"r", down:false });
+});
+
+canvas.addEventListener("wheel", e => {
+  if (!ctrlOn) return;
+  send({ t:"scroll", dy: e.deltaY>0 ? -1 : 1 });
+  e.preventDefault();
+}, { passive:false });
+
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+// ── 키보드 입력 ─────────────────────────
+document.addEventListener("keydown", e => {
+  if (!ctrlOn) return;
+  send({ t:"key", key: e.key.length===1 ? e.key : e.key.toLowerCase(), down:true });
+  if (["F5","Tab","Backspace"].includes(e.key)) e.preventDefault();
+});
+
+document.addEventListener("keyup", e => {
+  if (!ctrlOn) return;
+  send({ t:"key", key: e.key.length===1 ? e.key : e.key.toLowerCase(), down:false });
+});
+</script>
+</body>
+</html>
