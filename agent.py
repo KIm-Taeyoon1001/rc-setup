@@ -32,8 +32,9 @@ def fb_del(path):
         pass
 
 def exec_input(ev, sw, sh):
+    print(f"[input] {ev.get('t')} active={remote_active}")
     if not remote_active:
-        return
+        return    
     t = ev.get("t")
     try:
         if t == "move":
