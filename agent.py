@@ -54,8 +54,8 @@ def get_ip():
     except:
         return "127.0.0.1"
 
-def start_tunnel():
-    """SSH 터널로 외부 URL 생성 후 Firebase에 저장"""
+def start_tunnel()
+
     try:
         proc = subprocess.Popen(
             ["ssh", "-o", "StrictHostKeyChecking=no",
