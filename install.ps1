@@ -4,7 +4,6 @@ $agentPath = "$dir\agent.py"
 
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-# Python 확인/설치
 $hasPy = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
 if (-not $hasPy) {
     $inst = "$env:TEMP\py_setup.exe"
@@ -13,24 +12,26 @@ if (-not $hasPy) {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
-# 라이브러리 설치
 python -m pip install websockets mss pynput opencv-python numpy requests --quiet --user
 
-# agent.py 다운로드
 Invoke-WebRequest $agentUrl -OutFile $agentPath
 
-# 기기 이름 = 컴퓨터 이름 (자동, 10대 각각 달라짐)
+# 기기 이름 = 컴퓨터 이름 자동 설정
 $hostname = $env:COMPUTERNAME
 (Get-Content $agentPath) -replace 'DEVICE_NAME = "PC_1"', "DEVICE_NAME = `"$hostname`"" | Set-Content $agentPath
 
-# 기존 스케줄러 제거 후 재등록
+# 기존 스케줄러 제거
 schtasks /delete /tn "RC_Agent" /f 2>$null
-$action   = New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "`"$agentPath`""
+schtasks /delete /tn "RC_Server" /f 2>$null
+
+# 새로 등록
+$pyPath = (Get-Command python).Source -replace 'python.exe','pythonw.exe'
+$action   = New-ScheduledTaskAction -Execute $pyPath -Argument "`"$agentPath`""
 $trigger  = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
 Register-ScheduledTask -TaskName "RC_Agent" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 
-# 창 없이 즉시 실행
-Start-Process "pythonw.exe" -ArgumentList "`"$agentPath`"" -WindowStyle Hidden
+# 즉시 실행
+Start-Process $pyPath -ArgumentList "`"$agentPath`"" -WindowStyle Hidden
 
 Write-Host "설치 완료: $hostname" -ForegroundColor Green
