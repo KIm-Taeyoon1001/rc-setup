@@ -160,7 +160,7 @@ function connect(name, info) {
   document.getElementById("conn-status").textContent = "연결 중...";
   document.getElementById("canvas-hint").style.display = "flex";
 
-  const url = `ws://${info.ip}:${info.port}`;
+  const url = info.tunnel || `ws://${info.ip}:${info.port}`;
 
   ws = new WebSocket(url);
 
