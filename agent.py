@@ -1,26 +1,14 @@
 # -*- coding: utf-8 -*-
-import asyncio
-import json
-import asyncio
-import json
-import time
-import base64
-import threading
-import socket
-import subprocess
-import re
+import asyncio, json, time, base64, threading, socket, subprocess, re
 import numpy as np
 import mss as mss_lib
-import cv2
-import requests
-import websockets
+import cv2, requests, websockets
 from pynput.mouse import Controller as MouseCtrl, Button
 from pynput.keyboard import Controller as KeyCtrl, Key
 from pynput import keyboard as pkb, mouse as pms
 
 DEVICE_NAME = "PC_1"
 WS_PORT = 8889
-
 FPS = 15
 JPEG_QUALITY = 60
 SCALE = 0.75
@@ -54,8 +42,7 @@ def get_ip():
     except:
         return "127.0.0.1"
 
-def start_tunnel()
-
+def start_tunnel():
     try:
         proc = subprocess.Popen(
             ["ssh", "-o", "StrictHostKeyChecking=no",
@@ -67,16 +54,14 @@ def start_tunnel()
         )
         for line in proc.stdout:
             print(f"[tunnel] {line.strip()}")
-        
             match = re.search(r'https://([a-z0-9\-]+\.lhr\.life)', line)
             if match:
                 public_url = f"wss://{match.group(1)}"
                 fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
-                print(f"[tunnel] 외부 URL: {public_url}")
+                print(f"[tunnel] URL: {public_url}")
                 break
     except Exception as e:
-        print(f"[tunnel] 실패: {e}")
-        print("[tunnel] 같은 네트워크에서만 사용 가능")
+        print(f"[tunnel] failed: {e}")
 
 def exec_input(ev, sw, sh):
     if not remote_active:
@@ -117,13 +102,13 @@ def set_control(active):
     if active and blocker is None:
         try:
             blocker = InputBlocker()
-            print("[agent] 로컬 입력 차단 ON")
+            print("[agent] input blocked")
         except Exception as e:
-            print(f"[agent] 차단 실패: {e}")
+            print(f"[agent] block failed: {e}")
     elif not active and blocker:
         blocker.stop()
         blocker = None
-        print("[agent] 로컬 입력 차단 OFF")
+        print("[agent] input unblocked")
 
 async def stream_screen(ws, mon):
     interval = 1.0 / FPS
@@ -147,7 +132,7 @@ async def stream_screen(ws, mon):
 async def handler(ws):
     global connected
     connected.add(ws)
-    print(f"[agent] viewer 접속: {ws.remote_address}")
+    print(f"[agent] connected: {ws.remote_address}")
     fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
 
     with mss_lib.MSS() as sct:
@@ -170,7 +155,7 @@ async def handler(ws):
         if not connected:
             threading.Thread(target=set_control, args=(False,), daemon=True).start()
         fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
-        print(f"[agent] viewer 끊김")
+        print(f"[agent] disconnected")
 
 async def heartbeat():
     while True:
@@ -187,13 +172,10 @@ async def main():
         "ts": time.time(),
         "viewers": 0
     })
-    print(f"[agent] {DEVICE_NAME} 등록 ({ip}:{WS_PORT})")
-
-    
+    print(f"[agent] {DEVICE_NAME} ({ip}:{WS_PORT})")
     threading.Thread(target=start_tunnel, daemon=True).start()
-
     async with websockets.serve(handler, "0.0.0.0", WS_PORT):
-        print(f"[agent] 대기중...")
+        print(f"[agent] waiting...")
         asyncio.create_task(heartbeat())
         await asyncio.Future()
 
@@ -202,4 +184,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         fb_del(f"devices/{DEVICE_NAME}")
-        print("[agent] 종료")
+        print("[agent] stopped")
