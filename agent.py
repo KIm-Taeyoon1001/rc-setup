@@ -6,7 +6,7 @@ from pynput.mouse import Controller as MouseCtrl, Button
 from pynput.keyboard import Controller as KeyCtrl, Key
 from pynput import keyboard as pkb, mouse as pms
 
-DEVICE_NAME = "PC_1"
+DEVICE_NAME = os.environ.get("COMPUTERNAME", socket.gethostname())
 WS_PORT = 8889
 FPS = 15
 JPEG_QUALITY = 60
@@ -52,9 +52,9 @@ def start_tunnel():
         )
         for line in proc.stdout:
             print(f"[tunnel] {line.strip()}")
-            match = re.search(r'url=https://([a-z0-9\-\.]+\.ngrok-free\.[a-z]+)', line)
+            match = re.search(r'url=(https://[^\s]+)', line)
             if match:
-                public_url = f"wss://{match.group(1)}"
+                public_url = match.group(1).replace("https://", "wss://")
                 fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
                 print(f"[tunnel] URL: {public_url}")
                 break
