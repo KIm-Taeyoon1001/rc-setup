@@ -15,39 +15,43 @@ async def handler(ws):
 
         if role == "host":
             host_connections[device_id] = ws
-            print(f"[relay] host online: {device_id}")
+            print(f"[relay] HOST online: {device_id}", flush=True)
             async for frame in ws:
-                if device_id in viewer_connections:
+                v = viewer_connections.get(device_id)
+                if v:
                     try:
-                        await viewer_connections[device_id].send(frame)
+                        await v.send(frame)
                     except:
                         viewer_connections.pop(device_id, None)
 
         elif role == "viewer":
             viewer_connections[device_id] = ws
-            print(f"[relay] viewer: {device_id}")
-            if device_id not in host_connections:
-                await ws.send(json.dumps({"error": "host not found"}))
+            print(f"[relay] VIEWER joined: {device_id}", flush=True)
+            host = host_connections.get(device_id)
+            if not host:
+                print(f"[relay] no host for {device_id}", flush=True)
                 return
-            host = host_connections[device_id]
             async for msg in ws:
+                print(f"[relay] viewer->host: {msg[:50]}", flush=True)
                 try:
                     await host.send(msg)
-                except:
+                except Exception as e:
+                    print(f"[relay] send to host failed: {e}", flush=True)
                     break
 
     except Exception as e:
-        print(f"[relay] error: {e}")
+        print(f"[relay] error: {e}", flush=True)
     finally:
         if role == "host" and device_id:
             host_connections.pop(device_id, None)
-            print(f"[relay] host offline: {device_id}")
+            print(f"[relay] HOST offline: {device_id}", flush=True)
         elif role == "viewer" and device_id:
             viewer_connections.pop(device_id, None)
+            print(f"[relay] VIEWER left: {device_id}", flush=True)
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
-    print(f"[relay] port {port}")
+    print(f"[relay] port {port}", flush=True)
     async with websockets.serve(handler, "0.0.0.0", port, max_size=10*1024*1024):
         await asyncio.Future()
 
