@@ -4,16 +4,19 @@ import mss as mss_lib
 import cv2, requests, websockets
 from pynput.mouse import Controller as MouseCtrl, Button
 from pynput.keyboard import Controller as KeyCtrl, Key
+from pynput import keyboard as pkb, mouse as pms
 
 DEVICE_NAME = os.environ.get("COMPUTERNAME", socket.gethostname())
 RELAY_URL = "wss://rc-setup-production.up.railway.app"
-FPS = 15
-JPEG_QUALITY = 60
-SCALE = 0.75
+FPS = 12
+JPEG_QUALITY = 45
+SCALE = 0.6
 FIREBASE_URL = "https://remote-ctrl-c3035-default-rtdb.firebaseio.com"
 
 mouse_ctrl = MouseCtrl()
 kbd_ctrl = KeyCtrl()
+remote_active = False
+blocker = None
 
 def fb_set(path, data):
     try:
@@ -27,7 +30,35 @@ def fb_del(path):
     except:
         pass
 
+class InputBlocker:
+    def __init__(self):
+        self._kb = pkb.Listener(suppress=True)
+        self._ms = pms.Listener(suppress=True)
+        self._kb.start()
+        self._ms.start()
+    def stop(self):
+        try: self._kb.stop()
+        except: pass
+        try: self._ms.stop()
+        except: pass
+
+def set_control(active):
+    global remote_active, blocker
+    remote_active = active
+    if active and blocker is None:
+        try:
+            blocker = InputBlocker()
+            print("[agent] LOCAL INPUT BLOCKED")
+        except Exception as e:
+            print(f"[agent] block failed: {e}")
+    elif not active and blocker:
+        blocker.stop()
+        blocker = None
+        print("[agent] LOCAL INPUT UNBLOCKED")
+
 def exec_input(ev, sw, sh):
+    if not remote_active:
+        return
     t = ev.get("t")
     try:
         if t == "move":
@@ -81,8 +112,8 @@ async def connect_relay():
 
     while True:
         try:
-            print(f"[agent] connecting...")
-            async with websockets.connect(RELAY_URL, ping_interval=20, ping_timeout=10) as ws:
+            print("[agent] connecting...")
+            async with websockets.connect(RELAY_URL, ping_interval=15, ping_timeout=10, close_timeout=5) as ws:
                 await ws.send(json.dumps({"role": "host", "id": DEVICE_NAME}))
                 print(f"[agent] connected: {DEVICE_NAME}")
                 fb_set(f"devices/{DEVICE_NAME}", {
@@ -90,31 +121,32 @@ async def connect_relay():
                     "relay": RELAY_URL,
                     "ts": time.time()
                 })
-
                 stream_task = asyncio.create_task(stream_screen(ws))
                 try:
                     async for msg in ws:
                         try:
                             ev = json.loads(msg)
-                            if ev.get("t") != "toggle":
+                            if ev.get("t") == "toggle":
+                                threading.Thread(target=set_control, args=(ev["active"],), daemon=True).start()
+                            else:
                                 exec_input(ev, sw, sh)
                         except:
                             pass
-                except:
-                    pass
                 finally:
                     stream_task.cancel()
-
+                    threading.Thread(target=set_control, args=(False,), daemon=True).start()
         except Exception as e:
             print(f"[agent] error: {e}")
+            threading.Thread(target=set_control, args=(False,), daemon=True).start()
 
         fb_set(f"devices/{DEVICE_NAME}/status", "offline")
-        print("[agent] reconnecting in 5s...")
-        await asyncio.sleep(5)
+        print("[agent] reconnecting in 3s...")
+        await asyncio.sleep(3)
 
 if __name__ == "__main__":
     try:
         asyncio.run(connect_relay())
     except KeyboardInterrupt:
+        set_control(False)
         fb_del(f"devices/{DEVICE_NAME}")
         print("[agent] stopped")
