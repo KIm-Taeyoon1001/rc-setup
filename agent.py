@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import asyncio, json, time, base64, threading, socket, subprocess, re
 import numpy as np
 import mss as mss_lib
@@ -134,11 +133,9 @@ async def handler(ws):
     connected.add(ws)
     print(f"[agent] connected: {ws.remote_address}")
     fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
-
     with mss_lib.MSS() as sct:
         mon = sct.monitors[0]
         sw, sh = mon["width"], mon["height"]
-
     stream = asyncio.create_task(stream_screen(ws, mon))
     try:
         async for msg in ws:
