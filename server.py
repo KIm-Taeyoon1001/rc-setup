@@ -5,8 +5,8 @@ from pynput.keyboard import Controller as KeyCtrl, Key
 
 HOST = "0.0.0.0"
 PORT = 9999
-JPEG_QUALITY = 40   # 낮출수록 빠름/화질저하
-SCALE = 0.6         # 화면 축소 비율 (전송량 감소)
+JPEG_QUALITY = 40  
+SCALE = 0.6         
 
 mouse = MouseCtrl()
 keyboard = KeyCtrl()
@@ -30,7 +30,7 @@ def recv_msg(conn):
     length = struct.unpack(">I", raw)[0]
     return recv_all(conn, length)
 
-# 입력 재현 스레드
+
 def input_handler(conn, sw, sh):
     import json
     while True:
@@ -78,9 +78,9 @@ def main():
             with mss.mss() as sct:
                 mon = sct.monitors[1]
                 sw, sh = mon["width"], mon["height"]
-                # 화면 실제 해상도를 클라에 알림
+                
                 send_msg(conn, struct.pack(">II", sw, sh))
-                # 입력 수신 스레드 시작
+                
                 threading.Thread(target=input_handler, args=(conn, sw, sh), daemon=True).start()
 
                 while True:
