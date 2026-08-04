@@ -52,7 +52,7 @@ def start_tunnel():
         )
         for line in proc.stdout:
             print(f"[tunnel] {line.strip()}")
-            match = re.search(r'url=https://([a-z0-9\-]+\.ngrok-free\.app)', line)
+            match = re.search(r'url=https://([a-z0-9\-\.]+\.ngrok-free\.[a-z]+)', line)
             if match:
                 public_url = f"wss://{match.group(1)}"
                 fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
