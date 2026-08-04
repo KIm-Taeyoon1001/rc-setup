@@ -1,4 +1,4 @@
-import asyncio, json, time, base64, threading, socket, subprocess, re, os
+import asyncio, json, time, base64, threading, socket, os
 import numpy as np
 import mss as mss_lib
 import cv2, requests, websockets
@@ -7,6 +7,7 @@ from pynput.keyboard import Controller as KeyCtrl, Key
 from pynput import keyboard as pkb, mouse as pms
 
 DEVICE_NAME = os.environ.get("COMPUTERNAME", socket.gethostname())
+RELAY_URL = "wss://rc-setup-production.up.railway.app"
 WS_PORT = 8889
 FPS = 15
 JPEG_QUALITY = 60
@@ -17,7 +18,6 @@ mouse_ctrl = MouseCtrl()
 kbd_ctrl = KeyCtrl()
 remote_active = False
 blocker = None
-connected = set()
 
 def fb_set(path, data):
     try:
@@ -30,36 +30,6 @@ def fb_del(path):
         requests.delete(f"{FIREBASE_URL}/{path}.json", timeout=5)
     except:
         pass
-
-def get_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "127.0.0.1"
-
-def start_tunnel():
-    try:
-        ngrok_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ngrok.exe")
-        proc = subprocess.Popen(
-            [ngrok_path, "http", str(WS_PORT), "--log=stdout"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
-        )
-        for line in proc.stdout:
-            print(f"[tunnel] {line.strip()}")
-            match = re.search(r'url=(https://[^\s]+)', line)
-            if match:
-                public_url = match.group(1).replace("https://", "wss://")
-                fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
-                print(f"[tunnel] URL: {public_url}")
-                break
-    except Exception as e:
-        print(f"[tunnel] failed: {e}")
 
 def exec_input(ev, sw, sh):
     if not remote_active:
@@ -108,9 +78,10 @@ def set_control(active):
         blocker = None
         print("[agent] input unblocked")
 
-async def stream_screen(ws, mon):
+async def stream_screen(relay):
     interval = 1.0 / FPS
     with mss_lib.MSS() as sct:
+        mon = sct.monitors[0]
         while True:
             t0 = time.time()
             img = np.array(sct.grab(mon))
@@ -119,7 +90,7 @@ async def stream_screen(ws, mon):
             ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             if ok:
                 try:
-                    await ws.send(json.dumps({
+                    await relay.send(json.dumps({
                         "t": "frame",
                         "d": base64.b64encode(enc.tobytes()).decode()
                     }))
@@ -127,57 +98,45 @@ async def stream_screen(ws, mon):
                     break
             await asyncio.sleep(max(0, interval - (time.time() - t0)))
 
-async def handler(ws):
-    global connected
-    connected.add(ws)
-    print(f"[agent] connected: {ws.remote_address}")
-    fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
+async def connect_relay():
     with mss_lib.MSS() as sct:
         mon = sct.monitors[0]
         sw, sh = mon["width"], mon["height"]
-    stream = asyncio.create_task(stream_screen(ws, mon))
-    try:
-        async for msg in ws:
-            ev = json.loads(msg)
-            if ev.get("t") == "toggle":
-                threading.Thread(target=set_control, args=(ev["active"],), daemon=True).start()
-            else:
-                exec_input(ev, sw, sh)
-    except:
-        pass
-    finally:
-        stream.cancel()
-        connected.discard(ws)
-        if not connected:
-            threading.Thread(target=set_control, args=(False,), daemon=True).start()
-        fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
-        print(f"[agent] disconnected")
 
-async def heartbeat():
     while True:
-        await asyncio.sleep(30)
-        fb_set(f"devices/{DEVICE_NAME}/ts", time.time())
+        try:
+            print(f"[agent] connecting to relay...")
+            async with websockets.connect(RELAY_URL) as ws:
+                await ws.send(json.dumps({"role": "host", "id": DEVICE_NAME}))
+                print(f"[agent] connected as host: {DEVICE_NAME}")
+                fb_set(f"devices/{DEVICE_NAME}", {
+                    "status": "online",
+                    "relay": RELAY_URL,
+                    "ts": time.time()
+                })
 
-async def main():
-    ip = get_ip()
-    fb_set(f"devices/{DEVICE_NAME}", {
-        "status": "online",
-        "ip": ip,
-        "port": WS_PORT,
-        "tunnel": None,
-        "ts": time.time(),
-        "viewers": 0
-    })
-    print(f"[agent] {DEVICE_NAME} ({ip}:{WS_PORT})")
-    threading.Thread(target=start_tunnel, daemon=True).start()
-    async with websockets.serve(handler, "0.0.0.0", WS_PORT):
-        print(f"[agent] waiting...")
-        asyncio.create_task(heartbeat())
-        await asyncio.Future()
+                stream_task = asyncio.create_task(stream_screen(ws))
+                try:
+                    async for msg in ws:
+                        ev = json.loads(msg)
+                        if ev.get("t") == "toggle":
+                            threading.Thread(target=set_control, args=(ev["active"],), daemon=True).start()
+                        else:
+                            exec_input(ev, sw, sh)
+                except:
+                    pass
+                finally:
+                    stream_task.cancel()
+        except Exception as e:
+            print(f"[agent] relay error: {e}")
+        
+        fb_set(f"devices/{DEVICE_NAME}/status", "offline")
+        print("[agent] reconnecting in 5s...")
+        await asyncio.sleep(5)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(connect_relay())
     except KeyboardInterrupt:
         fb_del(f"devices/{DEVICE_NAME}")
         print("[agent] stopped")
