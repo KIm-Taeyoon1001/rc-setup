@@ -1,49 +1,54 @@
-import asyncio
+import asyncio, json, os
 import websockets
 
-clients = {}
+host_connections = {}
+viewer_connections = {}
 
 async def handler(ws):
     device_id = None
+    role = None
     try:
         msg = await ws.recv()
-        import json
         data = json.loads(msg)
-        device_id = data.get("id")
-        role = data.get("role")
-        
+        device_id = data["id"]
+        role = data["role"]
+
         if role == "host":
-            clients[device_id] = {"host": ws, "viewer": None}
-            print(f"[relay] host: {device_id}")
-            await ws.send(json.dumps({"status": "waiting"}))
-            await ws.wait_closed()
-        elif role == "viewer":
-            if device_id in clients and clients[device_id]["host"]:
-                clients[device_id]["viewer"] = ws
-                host = clients[device_id]["host"]
-                print(f"[relay] viewer joined: {device_id}")
-                async def forward(src, dst):
+            host_connections[device_id] = ws
+            print(f"[relay] host online: {device_id}")
+            async for frame in ws:
+                if device_id in viewer_connections:
                     try:
-                        async for msg in src:
-                            await dst.send(msg)
+                        await viewer_connections[device_id].send(frame)
                     except:
-                        pass
-                await asyncio.gather(
-                    forward(ws, host),
-                    forward(host, ws)
-                )
+                        viewer_connections.pop(device_id, None)
+
+        elif role == "viewer":
+            viewer_connections[device_id] = ws
+            print(f"[relay] viewer: {device_id}")
+            if device_id not in host_connections:
+                await ws.send(json.dumps({"error": "host not found"}))
+                return
+            host = host_connections[device_id]
+            async for msg in ws:
+                try:
+                    await host.send(msg)
+                except:
+                    break
+
     except Exception as e:
         print(f"[relay] error: {e}")
     finally:
-        if device_id and device_id in clients:
-            if clients[device_id].get("host") == ws:
-                del clients[device_id]
-                print(f"[relay] host left: {device_id}")
+        if role == "host" and device_id:
+            host_connections.pop(device_id, None)
+            print(f"[relay] host offline: {device_id}")
+        elif role == "viewer" and device_id:
+            viewer_connections.pop(device_id, None)
 
 async def main():
-    port = int(__import__("os").environ.get("PORT", 8080))
-    print(f"[relay] starting on :{port}")
-    async with websockets.serve(handler, "0.0.0.0", port):
+    port = int(os.environ.get("PORT", 8080))
+    print(f"[relay] port {port}")
+    async with websockets.serve(handler, "0.0.0.0", port, max_size=10*1024*1024):
         await asyncio.Future()
 
 asyncio.run(main())
