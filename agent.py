@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import json
 import asyncio
@@ -17,7 +18,6 @@ from pynput.mouse import Controller as MouseCtrl, Button
 from pynput.keyboard import Controller as KeyCtrl, Key
 from pynput import keyboard as pkb, mouse as pms
 
-# ★ 기기마다 이 두 줄만 수정
 DEVICE_NAME = "PC_1"
 WS_PORT = 8889
 
@@ -54,7 +54,6 @@ def get_ip():
     except:
         return "127.0.0.1"
 
-# ── SSH 터널 (localhost.run) ───────────────
 def start_tunnel():
     """SSH 터널로 외부 URL 생성 후 Firebase에 저장"""
     try:
@@ -68,7 +67,7 @@ def start_tunnel():
         )
         for line in proc.stdout:
             print(f"[tunnel] {line.strip()}")
-            # URL 파싱 (https://xxxx.lhr.life 형태)
+        
             match = re.search(r'https://([a-z0-9\-]+\.lhr\.life)', line)
             if match:
                 public_url = f"wss://{match.group(1)}"
@@ -190,7 +189,7 @@ async def main():
     })
     print(f"[agent] {DEVICE_NAME} 등록 ({ip}:{WS_PORT})")
 
-    # SSH 터널 백그라운드로 시작
+    
     threading.Thread(target=start_tunnel, daemon=True).start()
 
     async with websockets.serve(handler, "0.0.0.0", WS_PORT):
