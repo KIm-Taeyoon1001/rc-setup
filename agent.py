@@ -1,4 +1,4 @@
-import asyncio, json, time, base64, threading, socket, subprocess, re
+import asyncio, json, time, base64, threading, socket, subprocess, re, os
 import numpy as np
 import mss as mss_lib
 import cv2, requests, websockets
@@ -43,19 +43,20 @@ def get_ip():
 
 def start_tunnel():
     try:
+        ngrok_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ngrok.exe")
         proc = subprocess.Popen(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-R", f"80:localhost:{WS_PORT}",
-             "nokey@localhost.run"],
+            [ngrok_path, "tcp", str(WS_PORT), "--log=stdout"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
         )
         for line in proc.stdout:
             print(f"[tunnel] {line.strip()}")
-            match = re.search(r'https://([a-z0-9\-]+\.lhr\.life)', line)
+            match = re.search(r'url=tcp://(.+):(\d+)', line)
             if match:
-                public_url = f"wss://{match.group(1)}"
+                host = match.group(1)
+                port = match.group(2)
+                public_url = f"ws://{host}:{port}"
                 fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
                 print(f"[tunnel] URL: {public_url}")
                 break
