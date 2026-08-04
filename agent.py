@@ -4,6 +4,8 @@ import time
 import base64
 import threading
 import socket
+import subprocess
+import re
 import numpy as np
 import mss as mss_lib
 import cv2
@@ -17,7 +19,6 @@ from pynput import keyboard as pkb, mouse as pms
 DEVICE_NAME = "PC_1"
 WS_PORT = 8889
 
-# 설정
 FPS = 15
 JPEG_QUALITY = 60
 SCALE = 0.75
@@ -29,7 +30,6 @@ remote_active = False
 blocker = None
 connected = set()
 
-# ── Firebase REST ──────────────────────────
 def fb_set(path, data):
     try:
         requests.put(f"{FIREBASE_URL}/{path}.json", json=data, timeout=5)
@@ -42,7 +42,6 @@ def fb_del(path):
     except:
         pass
 
-# ── 로컬 IP ────────────────────────────────
 def get_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -53,7 +52,31 @@ def get_ip():
     except:
         return "127.0.0.1"
 
-# ── 입력 실행 ──────────────────────────────
+# ── SSH 터널 (localhost.run) ───────────────
+def start_tunnel():
+    """SSH 터널로 외부 URL 생성 후 Firebase에 저장"""
+    try:
+        proc = subprocess.Popen(
+            ["ssh", "-o", "StrictHostKeyChecking=no",
+             "-R", f"80:localhost:{WS_PORT}",
+             "nokey@localhost.run"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        for line in proc.stdout:
+            print(f"[tunnel] {line.strip()}")
+            # URL 파싱 (https://xxxx.lhr.life 형태)
+            match = re.search(r'https://([a-z0-9\-]+\.lhr\.life)', line)
+            if match:
+                public_url = f"wss://{match.group(1)}"
+                fb_set(f"devices/{DEVICE_NAME}/tunnel", public_url)
+                print(f"[tunnel] 외부 URL: {public_url}")
+                break
+    except Exception as e:
+        print(f"[tunnel] 실패: {e}")
+        print("[tunnel] 같은 네트워크에서만 사용 가능")
+
 def exec_input(ev, sw, sh):
     if not remote_active:
         return
@@ -77,23 +100,12 @@ def exec_input(ev, sw, sh):
     except:
         pass
 
-# ── 로컬 입력 차단 ─────────────────────────
 class InputBlocker:
     def __init__(self):
-        self._kb = pkb.Listener(
-            suppress=True,
-            on_press=lambda k: None,
-            on_release=lambda k: None
-        )
-        self._ms = pms.Listener(
-            suppress=True,
-            on_click=lambda *a: None,
-            on_move=lambda *a: None,
-            on_scroll=lambda *a: None
-        )
+        self._kb = pkb.Listener(suppress=True, on_press=lambda k: None, on_release=lambda k: None)
+        self._ms = pms.Listener(suppress=True, on_click=lambda *a: None, on_move=lambda *a: None, on_scroll=lambda *a: None)
         self._kb.start()
         self._ms.start()
-
     def stop(self):
         self._kb.stop()
         self._ms.stop()
@@ -106,13 +118,12 @@ def set_control(active):
             blocker = InputBlocker()
             print("[agent] 로컬 입력 차단 ON")
         except Exception as e:
-            print(f"[agent] 차단 실패 (관리자 권한 필요): {e}")
+            print(f"[agent] 차단 실패: {e}")
     elif not active and blocker:
         blocker.stop()
         blocker = None
         print("[agent] 로컬 입력 차단 OFF")
 
-# ── 화면 캡처 스트리밍 ──────────────────────
 async def stream_screen(ws, mon):
     interval = 1.0 / FPS
     with mss_lib.MSS() as sct:
@@ -121,10 +132,7 @@ async def stream_screen(ws, mon):
             img = np.array(sct.grab(mon))
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             img = cv2.resize(img, (0, 0), fx=SCALE, fy=SCALE)
-            ok, enc = cv2.imencode(
-                ".jpg", img,
-                [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-            )
+            ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             if ok:
                 try:
                     await ws.send(json.dumps({
@@ -135,7 +143,6 @@ async def stream_screen(ws, mon):
                     break
             await asyncio.sleep(max(0, interval - (time.time() - t0)))
 
-# ── WebSocket 핸들러 ───────────────────────
 async def handler(ws):
     global connected
     connected.add(ws)
@@ -147,14 +154,11 @@ async def handler(ws):
         sw, sh = mon["width"], mon["height"]
 
     stream = asyncio.create_task(stream_screen(ws, mon))
-
     try:
         async for msg in ws:
             ev = json.loads(msg)
             if ev.get("t") == "toggle":
-                threading.Thread(
-                    target=set_control, args=(ev["active"],), daemon=True
-                ).start()
+                threading.Thread(target=set_control, args=(ev["active"],), daemon=True).start()
             else:
                 exec_input(ev, sw, sh)
     except:
@@ -167,26 +171,28 @@ async def handler(ws):
         fb_set(f"devices/{DEVICE_NAME}/viewers", len(connected))
         print(f"[agent] viewer 끊김")
 
-# ── heartbeat ──────────────────────────────
 async def heartbeat():
     while True:
         await asyncio.sleep(30)
         fb_set(f"devices/{DEVICE_NAME}/ts", time.time())
 
-# ── 메인 ───────────────────────────────────
 async def main():
     ip = get_ip()
     fb_set(f"devices/{DEVICE_NAME}", {
         "status": "online",
         "ip": ip,
         "port": WS_PORT,
+        "tunnel": None,
         "ts": time.time(),
         "viewers": 0
     })
     print(f"[agent] {DEVICE_NAME} 등록 ({ip}:{WS_PORT})")
 
+    # SSH 터널 백그라운드로 시작
+    threading.Thread(target=start_tunnel, daemon=True).start()
+
     async with websockets.serve(handler, "0.0.0.0", WS_PORT):
-        print(f"[agent] 대기중... (같은 네트워크에서 연결 가능)")
+        print(f"[agent] 대기중...")
         asyncio.create_task(heartbeat())
         await asyncio.Future()
 
