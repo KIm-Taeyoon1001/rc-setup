@@ -1,12 +1,17 @@
-import asyncio, json, time, base64, threading, socket, os
+import asyncio, json, time, base64, threading, socket, os, platform
 import numpy as np
 import mss as mss_lib
 import cv2, requests, websockets
-from pynput.mouse import Controller as MouseCtrl, Button
-from pynput.keyboard import Controller as KeyCtrl, Key
-from pynput import keyboard as pkb, mouse as pms
+from pynput.mouse import Controller as MouseCtrl, Button, Listener as MouseListener
+from pynput.keyboard import Controller as KeyCtrl, Key, Listener as KeyListener
 
-DEVICE_NAME = os.environ.get("COMPUTERNAME", socket.gethostname())
+OS = platform.system()
+
+if OS == "Windows":
+    DEVICE_NAME = os.environ.get("COMPUTERNAME", socket.gethostname())
+else:
+    DEVICE_NAME = socket.gethostname().replace(".local", "")
+
 RELAY_URL = "wss://rc-setup-production.up.railway.app"
 FPS = 12
 JPEG_QUALITY = 45
@@ -16,7 +21,8 @@ FIREBASE_URL = "https://remote-ctrl-c3035-default-rtdb.firebaseio.com"
 mouse_ctrl = MouseCtrl()
 kbd_ctrl = KeyCtrl()
 remote_active = False
-blocker = None
+kb_listener = None
+ms_listener = None
 
 def fb_set(path, data):
     try:
@@ -30,31 +36,44 @@ def fb_del(path):
     except:
         pass
 
-class InputBlocker:
-    def __init__(self):
-        self._kb = pkb.Listener(suppress=True)
-        self._ms = pms.Listener(suppress=True)
-        self._kb.start()
-        self._ms.start()
-    def stop(self):
-        try: self._kb.stop()
-        except: pass
-        try: self._ms.stop()
-        except: pass
+def _suppress_key(key):
+    return False if remote_active else None
+
+def _suppress_mouse(*a):
+    return False if remote_active else None
+
+def start_blockers():
+    global kb_listener, ms_listener
+    try:
+        kb_listener = KeyListener(suppress=False)
+        ms_listener = MouseListener(suppress=False)
+        kb_listener.start()
+        ms_listener.start()
+    except Exception as e:
+        print(f"[agent] blocker start failed: {e}")
 
 def set_control(active):
-    global remote_active, blocker
+    global remote_active
     remote_active = active
-    if active and blocker is None:
-        try:
-            blocker = InputBlocker()
-            print("[agent] LOCAL INPUT BLOCKED")
-        except Exception as e:
-            print(f"[agent] block failed: {e}")
-    elif not active and blocker:
-        blocker.stop()
-        blocker = None
-        print("[agent] LOCAL INPUT UNBLOCKED")
+    print(f"[agent] control = {active}")
+
+def self_uninstall():
+    import sys, shutil, subprocess
+    print("[agent] uninstalling...")
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    if OS == "Windows":
+        startup = os.path.join(os.environ.get("APPDATA",""), "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "RC_Agent.bat")
+        try: os.remove(startup)
+        except: pass
+        subprocess.Popen(f'cmd /c timeout /t 2 && rmdir /s /q "{dir_path}"', shell=True)
+    elif OS == "Darwin":
+        plist = os.path.expanduser("~/Library/LaunchAgents/com.rc.agent.plist")
+        subprocess.run(["launchctl", "unload", plist], capture_output=True)
+        try: os.remove(plist)
+        except: pass
+        subprocess.Popen(f"sleep 2 && rm -rf '{dir_path}'", shell=True)
+    fb_del(f"devices/{DEVICE_NAME}")
+    sys.exit(0)
 
 def exec_input(ev, sw, sh):
     if not remote_active:
@@ -91,18 +110,18 @@ async def stream_screen(ws):
         mon = sct.monitors[0]
         while True:
             t0 = time.time()
-            img = np.array(sct.grab(mon))
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            img = cv2.resize(img, (0, 0), fx=SCALE, fy=SCALE)
-            ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-            if ok:
-                try:
+            try:
+                img = np.array(sct.grab(mon))
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                img = cv2.resize(img, (0, 0), fx=SCALE, fy=SCALE)
+                ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                if ok:
                     await ws.send(json.dumps({
                         "t": "frame",
                         "d": base64.b64encode(enc.tobytes()).decode()
                     }))
-                except:
-                    break
+            except:
+                break
             await asyncio.sleep(max(0, interval - (time.time() - t0)))
 
 async def connect_relay():
@@ -112,38 +131,56 @@ async def connect_relay():
 
     while True:
         try:
-            print("[agent] connecting...")
-            async with websockets.connect(RELAY_URL, ping_interval=15, ping_timeout=10, close_timeout=5) as ws:
+            print(f"[agent] connecting... ({OS})")
+            async with websockets.connect(
+                RELAY_URL,
+                ping_interval=None,
+                close_timeout=5,
+                max_size=None
+            ) as ws:
                 await ws.send(json.dumps({"role": "host", "id": DEVICE_NAME}))
                 print(f"[agent] connected: {DEVICE_NAME}")
+
+                existing = None
+                try:
+                    r = requests.get(f"{FIREBASE_URL}/devices/{DEVICE_NAME}/name.json", timeout=3)
+                    existing = r.json()
+                except:
+                    pass
                 fb_set(f"devices/{DEVICE_NAME}", {
                     "status": "online",
+                    "name": existing if existing else DEVICE_NAME,
+                    "os": OS,
                     "relay": RELAY_URL,
                     "ts": time.time()
                 })
+
                 stream_task = asyncio.create_task(stream_screen(ws))
                 try:
                     async for msg in ws:
                         try:
                             ev = json.loads(msg)
                             if ev.get("t") == "toggle":
-                                threading.Thread(target=set_control, args=(ev["active"],), daemon=True).start()
+                                set_control(ev["active"])
+                            elif ev.get("t") == "uninstall":
+                                threading.Thread(target=self_uninstall, daemon=True).start()
                             else:
                                 exec_input(ev, sw, sh)
                         except:
                             pass
                 finally:
                     stream_task.cancel()
-                    threading.Thread(target=set_control, args=(False,), daemon=True).start()
+                    set_control(False)
         except Exception as e:
             print(f"[agent] error: {e}")
-            threading.Thread(target=set_control, args=(False,), daemon=True).start()
+            set_control(False)
 
         fb_set(f"devices/{DEVICE_NAME}/status", "offline")
         print("[agent] reconnecting in 3s...")
         await asyncio.sleep(3)
 
 if __name__ == "__main__":
+    print(f"[agent] OS: {OS}, Device: {DEVICE_NAME}")
     try:
         asyncio.run(connect_relay())
     except KeyboardInterrupt:
