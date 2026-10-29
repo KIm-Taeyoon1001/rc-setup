@@ -128,12 +128,14 @@ db.ref("devices").on("value", snap => {
   const wrap = document.getElementById("devices-wrap");
   const data = snap.val();
   if (!data || !Object.keys(data).length) {
-    wrap.innerHTML = '<div class="empty">온라인 기기 없음</div>';
+    wrap.innerHTML = '<div class="empty">온라인 기기 없음 · 에이전트 실행 및 Firebase 등록 상태를 확인하세요.</div>';
     return;
   }
   wrap.innerHTML = "";
+  let onlineCount = 0;
   Object.entries(data).forEach(([id, info]) => {
-    if (info.status !== "online") return;
+    if (!info || info.status !== "online") return;
+    onlineCount++;
     const displayName = info.name || id;
     const osIcon = info.os === "Darwin" ? "🍎" : "🖥️";
     const card = document.createElement("div");
@@ -150,6 +152,15 @@ db.ref("devices").on("value", snap => {
     `;
     wrap.appendChild(card);
   });
+  if (onlineCount === 0) {
+    wrap.innerHTML = '<div class="empty">등록된 기기는 있지만 온라인 기기가 없습니다. 해당 기기의 agent.py 실행 로그와 네트워크 연결을 확인하세요.</div>';
+  }
+}, error => {
+  const wrap = document.getElementById("devices-wrap");
+  wrap.innerHTML = '<div class="empty">기기 목록을 읽지 못했습니다. Firebase Database 규칙과 연결 상태를 확인하세요. (' +
+    String(error && error.code ? error.code : "read-error").replace(/[&<>"]/g, "") +
+    ')</div>';
+  console.error("[firebase] device list read failed:", error);
 });
 
 // 이름 변경

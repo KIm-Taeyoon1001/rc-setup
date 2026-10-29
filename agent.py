@@ -26,9 +26,22 @@ ms_listener = None
 
 def fb_set(path, data):
     try:
-        requests.put(f"{FIREBASE_URL}/{path}.json", json=data, timeout=5)
-    except:
-        pass
+        response = requests.put(
+            f"{FIREBASE_URL}/{path}.json",
+            json=data,
+            timeout=5
+        )
+        if not response.ok:
+            print(
+                f"[firebase] PUT failed ({response.status_code}) "
+                f"for {path}: {response.text[:300]}",
+                flush=True
+            )
+            return False
+        return True
+    except requests.RequestException as e:
+        print(f"[firebase] PUT error for {path}: {e}", flush=True)
+        return False
 
 def fb_del(path):
     try:
